@@ -49,7 +49,7 @@ jobs:
       - name: Configurer Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       # 3. Installer les dépendances
@@ -90,15 +90,12 @@ jobs:
       # 8. Ajouter la plateforme Android et Synchroniser via Capacitor
       - name: Ajouter la plateforme Android & Sync Capacitor
         run: |
-          # Installer l'outil d'assets localement s'il n'est pas présent
-          npm install -g @capacitor/assets || true
-          
           # Initialiser ou synchroniser Android
           npx cap add android || true
           npx cap sync
           
-          # Générer les icônes et écrans de démarrage Android automatiquement
-          npx cap-assets generate --android || true
+          # Générer les icônes et écrans de démarrage Android automatiquement avec le package local
+          npx @capacitor/assets generate --android || true
 
       # 9. Configurer la compatibilité Android 10 à 15 (SDK 29 à 35)
       - name: Ajuster la compatibilité SDK Android (Android 10 à 15)
