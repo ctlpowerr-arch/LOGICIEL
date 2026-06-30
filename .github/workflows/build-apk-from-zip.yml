@@ -1,0 +1,155 @@
+name: Build Android APK (devis-pro)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'APK.zip'
+      - 'apk.zip'
+      - 'package.json'
+      - 'src/**'
+      - 'public/**'
+  workflow_dispatch: # Permet de lancer la construction manuellement depuis GitHub
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Requis pour sauvegarder les fichiers décompressés dans le dépôt
+
+    steps:
+      - name: Récupérer le code (Checkout)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 1. Décompresser le fichier ZIP si présent
+      - name: Décompresser APK.zip automatiquement
+        run: |
+          ZIP_FILE=""
+          if [ -f "APK.zip" ]; then
+            ZIP_FILE="APK.zip"
+          elif [ -f "apk.zip" ]; then
+            ZIP_FILE="apk.zip"
+          fi
+
+          if [ ! -z "$ZIP_FILE" ]; then
+            echo "Fichier ZIP détecté : $ZIP_FILE"
+            echo "Extraction en cours..."
+            unzip -o "$ZIP_FILE"
+            rm "$ZIP_FILE"
+            echo "Extraction terminée."
+          else
+            echo "Aucun fichier APK.zip ou apk.zip trouvé à la racine. Passage à la suite avec le code existant."
+          fi
+
+      # 2. Configurer l'environnement Node.js
+      - name: Configurer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 3. Installer les dépendances
+      - name: Installer les dépendances NPM
+        run: |
+          npm ci || npm install
+
+      # 4. Configurer Java (Requis pour la compilation Android)
+      - name: Configurer Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 5. Configurer le SDK Android
+      - name: Configurer le SDK Android
+        uses: android-actions/setup-android@v3
+
+      # 6. Construire l'application Web (React/Vite)
+      - name: Compiler le projet Web (Vite)
+        run: npm run build
+
+      # 7. Créer ou récupérer un Icône Premium pour devis-pro
+      - name: Configurer l'icône de l'application
+        run: |
+          mkdir -p assets
+          # Télécharge un magnifique icône de document bleu de type "devis/facture" s'il n'existe pas déjà
+          if [ ! -f "assets/icon-only.png" ] && [ ! -f "assets/icon.png" ]; then
+            echo "Téléchargement d'un icône de haute qualité pour devis-pro..."
+            curl -s -L -o assets/icon-only.png "https://raw.githubusercontent.com/google/material-design-icons/master/png/action/assignment/ios/ic_assignment_4x.png"
+            cp assets/icon-only.png assets/icon.png
+          fi
+          if [ ! -f "assets/splash-only.png" ] && [ ! -f "assets/splash.png" ]; then
+            cp assets/icon-only.png assets/splash-only.png
+            cp assets/icon-only.png assets/splash.png
+          fi
+
+      # 8. Ajouter la plateforme Android et Synchroniser via Capacitor
+      - name: Ajouter la plateforme Android & Sync Capacitor
+        run: |
+          # Installer l'outil d'assets localement s'il n'est pas présent
+          npm install -g @capacitor/assets || true
+          
+          # Initialiser ou synchroniser Android
+          npx cap add android || true
+          npx cap sync
+          
+          # Générer les icônes et écrans de démarrage Android automatiquement
+          npx cap-assets generate --android || true
+
+      # 9. Configurer la compatibilité Android 10 à 15 (SDK 29 à 35)
+      - name: Ajuster la compatibilité SDK Android (Android 10 à 15)
+        run: |
+          if [ -f "android/variables.gradle" ]; then
+            echo "Configuration des versions SDK dans variables.gradle..."
+            # Forcer le minSdkVersion à 22 (Android 5.1+) pour une compatibilité maximale (inclut Android 10, 11, 12, 13, 14, 15)
+            sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 22/g' android/variables.gradle
+            # Forcer le targetSdkVersion et compileSdkVersion à 35 (Android 15) pour les dernières normes
+            sed -i 's/targetSdkVersion = [0-9]*/targetSdkVersion = 35/g' android/variables.gradle
+            sed -i 's/compileSdkVersion = [0-9]*/compileSdkVersion = 35/g' android/variables.gradle
+            cat android/variables.gradle
+          fi
+
+      # 10. Compiler le fichier APK
+      - name: Compiler le fichier APK (Gradle)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 11. Préparer le fichier APK final
+      - name: Renommer et déplacer l'APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk ./devis-pro.apk
+          echo "APK généré avec succès à la racine sous le nom devis-pro.apk !"
+
+      # 12. Sauvegarder les fichiers décompressés sur GitHub (Optionnel et propre)
+      - name: Sauvegarder le code décompressé sur GitHub
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Ignorer les dossiers de build locaux volumineux si besoin
+          git add assets/ || true
+          git add android/ || true
+          git add -A
+          
+          if git diff-index --quiet HEAD --; then
+            echo "Aucun nouveau fichier de code à commiter."
+          else
+            git commit -m "Extraction automatique de APK.zip et mise à jour de la configuration Android"
+            git push origin ${{ github.ref_name }}
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 13. Publier l'APK comme artefact de téléchargement direct
+      - name: Téléverser l'APK devis-pro
+        uses: actions/upload-artifact@v4
+        with:
+          name: devis-pro-APK
+          path: ./devis-pro.apk
+          retention-days: 7
